@@ -7,7 +7,7 @@ services:
     container_name: mcp-db-server
     restart: unless-stopped
     environment:
-      - DATABASE_URL=sqlite+aiosqlite:///data/default.db
+      - DATABASE_URL=mysql+aiomysql://root:pass@mariadb_dev:3306/tns_database
       - PYTHONUNBUFFERED=1
     ports:
       - "8000:8000"
@@ -24,65 +24,7 @@ services:
       start_period: 10s
     networks:
       - mcp-network
-
-  # Optional PostgreSQL service for testing
-  postgres:
-    image: postgres:15-alpine
-    container_name: mcp-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: testdb
-      POSTGRES_USER: mcp_user
-      POSTGRES_PASSWORD: mcp_password
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./init-scripts:/docker-entrypoint-initdb.d:ro
-    ports:
-      - "5432:5432"
-    networks:
-      - mcp-network
-    profiles:
-      - with-postgres
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mcp_user -d testdb"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # Optional MySQL service for testing
-  mysql:
-    image: mysql:8.0
-    container_name: mcp-mysql
-    restart: unless-stopped
-    environment:
-      MYSQL_ROOT_PASSWORD: root_password
-      MYSQL_DATABASE: testdb
-      MYSQL_USER: mcp_user
-      MYSQL_PASSWORD: mcp_password
-    volumes:
-      - mysql_data:/var/lib/mysql
-      - ./init-scripts:/docker-entrypoint-initdb.d:ro
-    ports:
-      - "3306:3306"
-    networks:
-      - mcp-network
-    profiles:
-      - with-mysql
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "mysqladmin",
-          "ping",
-          "-h",
-          "localhost",
-          "-u",
-          "mcp_user",
-          "-pmcp_password",
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      - database_link
 
 volumes:
   postgres_data:
@@ -91,3 +33,5 @@ volumes:
 networks:
   mcp-network:
     driver: bridge
+  database_link:
+    external: true
