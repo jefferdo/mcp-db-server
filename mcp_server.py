@@ -6,13 +6,13 @@ This is a proper MCP server that Claude can connect to directly.
 It provides database query capabilities through the Model Context Protocol.
 """
 
+import argparse
 import asyncio
+import logging
 import os
 import sys
-import logging
-import argparse
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Any, Dict, List
 
 # Add the app directory to the path
 # Use absolute path resolution that works both locally and in Docker
@@ -24,11 +24,11 @@ else:
     # Fallback for Docker container where app might be at /app/app
     sys.path.insert(0, '/app/app')
 
-from mcp.server import fastmcp
-from dotenv import load_dotenv
-
 # Import our database functionality
 from db import DatabaseManager
+from dotenv import load_dotenv
+from mcp.server import fastmcp
+from mcp.server.transport_security import TransportSecuritySettings
 from nl_to_sql import NLToSQLConverter
 
 # Set up logging
@@ -546,15 +546,80 @@ async def main(database_url: str = None, config_file: str = None):
 if __name__ == "__main__":
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='MCP Database Server')
-    parser.add_argument('--database-url', '-d', 
+    parser.add_argument('--database-url', '-d',
                        help='Database URL (e.g., sqlite+aiosqlite:///students.db or postgresql+asyncpg://user:pass@host:port/db)')
     parser.add_argument('--config-file', '-c',
                        help='Path to configuration file with database settings')
+    parser.add_argument('--transport', '-t', choices=['stdio', 'sse', 'streamable-http'], default='stdio',
+                       help='Transport mode: stdio (default), sse, or streamable-http (for modern clients like Antigravity)')
+    parser.add_argument('--host', default='127.0.0.1',
+                       help='Host to bind to when using SSE transport (default: 127.0.0.1)')
+    parser.add_argument('--port', '-p', type=int, default=8000,
+                       help='Port to listen on when using SSE transport (default: 8000)')
     
     args = parser.parse_args()
     
     async def run_server():
         await initialize_database(args.database_url, args.config_file)
-        await mcp.run_stdio_async()
+        if args.transport == "sse":
+            mcp.settings.host = args.host
+            mcp.settings.port = args.port
+            # Configure allowed Host headers for DNS-rebinding protection.
+            # When behind a reverse proxy (e.g. nginx), clients connect via
+            # the proxy's public address (e.g. localhost:8000) so that Host
+            # value must be explicitly allowed here.
+            allowed_hosts_env = os.getenv("MCP_ALLOWED_HOSTS", "")
+            if allowed_hosts_env:
+                allowed_hosts = [
+                    h.strip() for h in allowed_hosts_env.split(",") if h.strip()
+                ]
+            else:
+                # Sensible defaults: the server's own host/port plus common
+                # proxy-facing addresses.
+                allowed_hosts = [
+                    args.host,
+                    f"{args.host}:{args.port}",
+                    "localhost",
+                    f"localhost:{args.port}",
+                    "127.0.0.1",
+                    f"127.0.0.1:{args.port}",
+                ]
+            mcp.settings.transport_security = TransportSecuritySettings(
+                enable_dns_rebinding_protection=True,
+                allowed_hosts=allowed_hosts,
+            )
+            logger.info(
+                f"Starting SSE server on http://{args.host}:{args.port}/sse "
+                f"(allowed_hosts={allowed_hosts})"
+            )
+            await mcp.run_sse_async()
+        elif args.transport == "streamable-http":
+            mcp.settings.host = args.host
+            mcp.settings.port = args.port
+            allowed_hosts_env = os.getenv("MCP_ALLOWED_HOSTS", "")
+            if allowed_hosts_env:
+                allowed_hosts = [
+                    h.strip() for h in allowed_hosts_env.split(",") if h.strip()
+                ]
+            else:
+                allowed_hosts = [
+                    args.host,
+                    f"{args.host}:{args.port}",
+                    "localhost",
+                    f"localhost:{args.port}",
+                    "127.0.0.1",
+                    f"127.0.0.1:{args.port}",
+                ]
+            mcp.settings.transport_security = TransportSecuritySettings(
+                enable_dns_rebinding_protection=True,
+                allowed_hosts=allowed_hosts,
+            )
+            logger.info(
+                f"Starting streamable-HTTP server on http://{args.host}:{args.port}/mcp "
+                f"(allowed_hosts={allowed_hosts})"
+            )
+            await mcp.run_streamable_http_async()
+        else:
+            await mcp.run_stdio_async()
     
     asyncio.run(run_server())
